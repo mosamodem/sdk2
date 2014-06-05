@@ -41,6 +41,13 @@ PosixFileAccess::PosixFileAccess()
 
 PosixFileAccess::~PosixFileAccess()
 {
+#ifndef HAVE_FDOPENDIR
+    if (dp)
+    {
+        closedir(dp);
+    }
+#endif
+
     if (fd >= 0)
     {
         close(fd);
@@ -269,6 +276,7 @@ void PosixFileSystemAccess::addevents(Waiter* w, int flags)
         PosixWaiter* pw = (PosixWaiter*)w;
 
         FD_SET(notifyfd, &pw->rfds);
+        FD_SET(notifyfd, &pw->ignorefds);
 
         pw->bumpmaxfd(notifyfd);
     }
@@ -366,10 +374,10 @@ int PosixFileSystemAccess::checkevents(Waiter* w)
         if (lastcookie)
         {
             ignore = &lastlocalnode->sync->dirnotify->ignore;
-            if((lastname.size() < ignore->size())
+            if (lastname.size() < ignore->size()
                 || memcmp(lastname.c_str(), ignore->data(), ignore->size())
-                || ((lastname.size() > ignore->size())
-                        && memcmp(lastname.c_str() + ignore->size(), localseparator.c_str(), localseparator.size())))
+                || (lastname.size() > ignore->size()
+                   && memcmp(lastname.c_str() + ignore->size(), localseparator.c_str(), localseparator.size())))
             {
                 lastlocalnode->sync->dirnotify->notify(DirNotify::DIREVENTS,
                                                        lastlocalnode,
@@ -562,7 +570,15 @@ bool PosixFileSystemAccess::getsname(string*, string*) const
 
 bool PosixFileSystemAccess::renamelocal(string* oldname, string* newname, bool)
 {
-    return !rename(oldname->c_str(), newname->c_str());
+    if (!rename(oldname->c_str(), newname->c_str()))
+    {
+        return true;
+    }
+    
+    target_exists = errno == EEXIST;
+    transient_error = errno == ETXTBSY || errno == EBUSY;
+
+    return false;
 }
 
 bool PosixFileSystemAccess::copylocal(string* oldname, string* newname, m_time_t mtime)
@@ -588,6 +604,11 @@ bool PosixFileSystemAccess::copylocal(string* oldname, string* newname, m_time_t
 #endif
             close(tfd);
         }
+        else
+        {
+            target_exists = errno == EEXIST;
+            transient_error = errno == ETXTBSY || errno == EBUSY;
+        }
 
         close(sfd);
     }
@@ -608,12 +629,20 @@ bool PosixFileSystemAccess::rubbishlocal(string* name)
 
 bool PosixFileSystemAccess::unlinklocal(string* name)
 {
-    return !unlink(name->c_str());
+    if (!unlink(name->c_str())) return true;
+
+    transient_error = errno == ETXTBSY || errno == EBUSY;
+
+    return false;
 }
 
 bool PosixFileSystemAccess::rmdirlocal(string* name)
 {
-    return !rmdir(name->c_str());
+    if (!rmdir(name->c_str())) return true;
+
+    transient_error = errno == ETXTBSY || errno == EBUSY;
+
+    return false;
 }
 
 bool PosixFileSystemAccess::mkdirlocal(string* name, bool)
@@ -622,7 +651,8 @@ bool PosixFileSystemAccess::mkdirlocal(string* name, bool)
 
     if (!r)
     {
-        target_exists = (errno == EEXIST);
+        target_exists = errno == EEXIST;
+        transient_error = errno == ETXTBSY || errno == EBUSY;
     }
 
     return r;
@@ -829,6 +859,7 @@ bool PosixDirAccess::dnext(string* name, nodetype_t* type)
                         || (d->d_name[1] && ((d->d_name[1] != '.') || d->d_name[2]))))
         {
             *name = d->d_name;
+
             if (type)
             {
                 *type = d->d_type == DT_DIR ? FOLDERNODE : FILENODE;

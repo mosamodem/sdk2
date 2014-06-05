@@ -1,5 +1,4 @@
-MEGA SDK - Client Access Engine
-===============================
+# MEGA SDK - Client Access Engine  [![Build Status](https://travis-ci.org/meganz/sdk2.svg)](https://travis-ci.org/meganz/sdk2)
 
 Building
 --------
@@ -35,10 +34,12 @@ artifacts.
 
 Install the following development packages, if available, or download
 and compile their respective sources (package names are for
-Debian and RedHat derivatives respectively):
+Debian and RedHat derivatives, respectively):
 
 * Crypto++ (`libcrypto++-dev`, `cryptopp-devel`)
 * cURL (`libcurl-dev`, `curl-devel`)
+* SQLite (`libsqlite3-dev`, `sqlite-devel`) (optional)
+* FreeImage (`libfreeimage-dev`, `freeimage-devel`) (optional)
 
 CAUTION: Verify that the installed `libcurl` uses c-ares for
 asynchronous name resolution.  If that is not the case, compile it
@@ -48,14 +49,15 @@ stuck whenever a non-cached hostname is accessed. Also, bear in mind
 that not enabling asynchronous DNS resolving at all would result in
 the engine losing its non-blocking behaviour.
 
-Filesystem event monitoring: Under Linux, inotify is used; periodic full
-directory scans otherwise.
+CAUTION: The provided cURL-based POSIX network layer relies on
+OpenSSL-specific functionality for security-critical peer authentication.
+
+Filesystem event monitoring: The provided filesystem layer implements
+the Linux inotify and the MacOS fsevents interfaces.
 
 To build the the reference megacli example, you may also need to install:
 
 * GNU Readline (`libreadline-dev`, `readline-devel`)
-* FreeImage (`libfreeimage-dev`, `freeimage-devel`)
-* SQLite (`libsqlite3-dev`, `sqlite-devel`)
 
 Please ensure that your terminal supports UTF-8 if you want to see and
 manipulate non-ASCII filenames.
@@ -63,24 +65,20 @@ manipulate non-ASCII filenames.
 
 ### Windows
 
-To build the client access engine under Windows, you'll need to following:
+To build the client access engine under Windows, you'll need the following:
 
 * A Windows-native C++ development environment (e.g. MinGW or Visual Studio)
 * Crypto++
 * zlib (until WinHTTP learns how to deal with Content-Encoding: gzip)
-
-(You won't need cURL, as megaclient's Win32 version relies on WinHTTP
-for network access. Windows-native filesystem event monitoring is
-implemented.)
+* SQLite (optional)
+* FreeImage (optional)
 
 To build the reference megacli.exe example, you will also need to procure
-development packages (at least headers and .lib/.a libraries):
+development packages (at least headers and .lib/.a libraries) of:
 
-* FreeImage
 * GNU Readline/Termcap
-* SQLite
 
-CAUTION: The megaclient example is currently not handling Unicode
+CAUTION: The megacli example is currently not handling console Unicode
 input/output correctly if run in cmd.exe.
 
 Filename caveats: Please prefix all paths with `\\?\` to avoid the following
@@ -117,7 +115,7 @@ will lead to unexpected results and loss of data.
 
 * No in-place versioning. Deleted remote files can be found in
 //bin/SyncDebris, deleted local files in a sync-specific hidden debris
-folder.
+folder located in the local sync's root folder.
 
 * No delta writes. Changed files are always overwritten as a whole, which
 means that it is not a good idea to sync e.g. live database tables.

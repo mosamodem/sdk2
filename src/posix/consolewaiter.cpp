@@ -24,28 +24,22 @@
 namespace mega {
 int PosixConsoleWaiter::wait()
 {
-    int numfd;
+    int r;
 
-    // application's own wakeup criteria:
-    // wake up upon user input
+    // application's own wakeup criteria: wake up upon user input
     FD_SET(STDIN_FILENO, &rfds);
+    FD_SET(STDIN_FILENO, &ignorefds);
+    
     bumpmaxfd(STDIN_FILENO);
 
-    numfd = select();
+    r = PosixWaiter::wait();
 
-    // timeout or error
-    if (numfd <= 0)
-    {
-        return NEEDEXEC;
-    }
-
-    // application's own event processing:
-    // user interaction from stdin?
+    // application's own event processing: user interaction from stdin?
     if (FD_ISSET(STDIN_FILENO, &rfds))
     {
-        return (numfd == 1) ? HAVESTDIN : (HAVESTDIN | NEEDEXEC);
+        r |= HAVESTDIN;
     }
 
-    return NEEDEXEC;
+    return r;
 }
 } // namespace

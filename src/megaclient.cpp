@@ -246,13 +246,15 @@ void MegaClient::mergenewshares(bool notify)
 }
 
 // configure for full account session access
-void MegaClient::setsid(const byte* sid, unsigned len)
+void MegaClient::setsid(const byte* newsid, unsigned len)
 {
     auth = "&sid=";
 
     int t = auth.size();
     auth.resize(t + len * 4 / 3 + 4);
-    auth.resize(t + Base64::btoa(sid, len, (char*)(auth.c_str() + t)));
+    auth.resize(t + Base64::btoa(newsid, len, (char*)(auth.c_str() + t)));
+    
+    sid.assign((const char*)newsid, len);
 }
 
 // configure for exported folder links access
@@ -309,7 +311,9 @@ bool MegaClient::warnlevel()
 Node* MegaClient::childnodebyname(Node* p, const char* name)
 {
     string nname = name;
+
     fsaccess->normalize(&nname);
+
     for (node_list::iterator it = p->children.begin(); it != p->children.end(); it++)
     {
         if (!strcmp(nname.c_str(), (*it)->displayname()))
@@ -3685,32 +3689,77 @@ error MegaClient::folderaccess(const char* f, const char* k)
     return API_OK;
 }
 
-void MegaClient::login(const char* email, const byte* pwkey, bool nocache)
+// create new session
+void MegaClient::login(const char* email, const byte* pwkey)
 {
     logout();
 
-    string t;
     string lcemail(email);
 
     key.setkey((byte*)pwkey);
 
     uint64_t emailhash = stringhash64(&lcemail, &key);
 
-    lcemail.append("v2");
+    reqs[r].add(new CommandLogin(this, email, emailhash));
+}
 
-    if (!nocache && dbaccess && (sctable = dbaccess->open(fsaccess, &lcemail)) && sctable->get(CACHEDSCSN, &t))
+// resume session - load state from local cache, if available
+void MegaClient::login(const byte* session, int size)
+{
+    logout();
+   
+    if (size == sizeof key.key + SIDLEN)
     {
-        if (t.size() == sizeof cachedscsn)
+        string t;
+
+        key.setkey(session);
+        setsid(session + sizeof key.key, size - sizeof key.key);
+
+        opensctable();
+
+        if (sctable && sctable->get(CACHEDSCSN, &t) && t.size() == sizeof cachedscsn)
         {
             cachedscsn = MemAccess::get<handle>(t.data());
         }
-        else
-        {
-            cachedscsn = UNDEF;
-        }
+
+        reqs[r].add(new CommandLogin(this, NULL, UNDEF));
+    }
+    else
+    {
+        restag = reqtag;
+        app->login_result(API_EARGS);
+    }
+}
+
+int MegaClient::dumpsession(byte* session, int size)
+{
+    if (loggedin() == NOTLOGGEDIN)
+    {
+        return 0;
     }
 
-    reqs[r].add(new CommandLogin(this, email, emailhash));
+    if (size < (int)sid.size() + (int)sizeof key.key)
+    {
+        return API_ERANGE;
+    }
+
+    memcpy(session, key.key, sizeof key.key);
+    memcpy(session + sizeof key.key, sid.data(), sid.size());
+    
+    return sizeof key.key + sid.size();
+}
+
+void MegaClient::opensctable()
+{
+    if (dbaccess && !sctable)
+    {
+        string dbname;
+
+        dbname.resize((SIDLEN - sizeof key.key) * 4 / 3 + 3);
+        dbname.resize(Base64::btoa((const byte*)sid.data() + sizeof key.key, SIDLEN - sizeof key.key, (char*)dbname.c_str()));
+
+        sctable = dbaccess->open(fsaccess, &dbname);
+    }
 }
 
 // verify a static symmetric password challenge
@@ -4641,6 +4690,13 @@ bool MegaClient::fetchsc(DbTable* sctable)
 void MegaClient::fetchnodes()
 {
     statecurrent = false;
+
+    opensctable();
+
+    if (sctable && cachedscsn == UNDEF)
+    {
+        sctable->truncate();
+    }
 
     // only initial load from local cache
     if (loggedin() == FULLACCOUNT && !nodes.size() && sctable && !ISUNDEF(cachedscsn) && fetchsc(sctable))

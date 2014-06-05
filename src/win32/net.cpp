@@ -138,7 +138,6 @@ VOID CALLBACK WinHttpIO::asynccallback(HINTERNET hInternet, DWORD_PTR dwContext,
 
                 req->status = req->httpstatus == 200 ? REQ_SUCCESS : REQ_FAILURE;
                 httpio->success = true;
-                httpio->httpevent();
             }
             else
             {
@@ -242,7 +241,7 @@ VOID CALLBACK WinHttpIO::asynccallback(HINTERNET hInternet, DWORD_PTR dwContext,
                                                 &contentEncoding,
                                                 &contentEncodingSize,
                                                 WINHTTP_NO_HEADER_INDEX)
-                                    && !wcscmp(contentEncoding,L"gzip");
+                                    && !wcscmp(contentEncoding, L"gzip");
 
                         if (httpctx->gzip)
                         {
@@ -271,22 +270,47 @@ VOID CALLBACK WinHttpIO::asynccallback(HINTERNET hInternet, DWORD_PTR dwContext,
                     httpio->inetstatus(true);
                 }
             }
+
+            break;
         }
-        break;
 
         case WINHTTP_CALLBACK_STATUS_REQUEST_ERROR:
             if (httpio->waiter && GetLastError() != ERROR_WINHTTP_TIMEOUT)
             {
                 httpio->inetstatus(false);
             }
-
-        // fall through
+            // fall through
         case WINHTTP_CALLBACK_STATUS_SECURE_FAILURE:
             httpio->cancel(req);
             httpio->httpevent();
             break;
 
         case WINHTTP_CALLBACK_STATUS_SENDREQUEST_COMPLETE:
+        {
+            PCCERT_CONTEXT cert;
+            DWORD len = sizeof cert;
+
+            if (WinHttpQueryOption(httpctx->hRequest, WINHTTP_OPTION_SERVER_CERT_CONTEXT, &cert, &len))
+            {
+                CRYPT_BIT_BLOB* pkey = &cert->pCertInfo->SubjectPublicKeyInfo.PublicKey;
+
+                // this is an SSL connection: verify public key to prevent MITM attacks
+                if (pkey->cbData != 270
+                 || (memcmp(pkey->pbData, "\x30\x82\x01\x0a\x02\x82\x01\x01\x00" APISSLMODULUS1
+                                          "\x02" APISSLEXPONENTSIZE APISSLEXPONENT, 270)
+                  && memcmp(pkey->pbData, "\x30\x82\x01\x0a\x02\x82\x01\x01\x00" APISSLMODULUS2
+                                          "\x02" APISSLEXPONENTSIZE APISSLEXPONENT, 270)))
+                {
+                    CertFreeCertificateContext(cert);
+                    httpio->cancel(req);
+                    httpio->httpevent();
+                    break;
+                }
+
+                CertFreeCertificateContext(cert);
+            }
+        }
+            // fall through
         case WINHTTP_CALLBACK_STATUS_WRITE_COMPLETE:
             if (httpctx->postpos < httpctx->postlen)
             {
@@ -393,9 +417,25 @@ void WinHttpIO::post(HttpReq* req, const char* data, unsigned len)
                 // semi-smooth UI progress info
                 httpctx->postlen = data ? len : req->out->size();
                 httpctx->postdata = data ? data : req->out->data();
-                httpctx->postpos = (httpctx->postlen < HTTP_POST_CHUNK_SIZE)
-                                   ? httpctx->postlen
-                                   : HTTP_POST_CHUNK_SIZE;
+
+                if (urlComp.nPort == 80)
+                {
+                    // HTTP connection: send a chunk of data immediately
+                    httpctx->postpos = (httpctx->postlen < HTTP_POST_CHUNK_SIZE)
+                                      ? httpctx->postlen
+                                      : HTTP_POST_CHUNK_SIZE;
+                }
+                else
+                {
+                    // HTTPS connection: ignore certificate errors, send no data yet
+                    DWORD flags = SECURITY_FLAG_IGNORE_CERT_CN_INVALID
+                                | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID
+                                | SECURITY_FLAG_IGNORE_UNKNOWN_CA;
+
+                    WinHttpSetOption(httpctx->hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &flags, sizeof flags);
+
+                    httpctx->postpos = 0;
+                }
 
                 if (WinHttpSendRequest(httpctx->hRequest, pwszHeaders,
                                        wcslen(pwszHeaders),
